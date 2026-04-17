@@ -7,13 +7,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:8595@localhost:5433/kanban"
+    DATABASE_URL: str = str
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379"
+    REDIS_URL: str = str
 
     # JWT
-    SECRET_KEY: str = "553dd06359ec4ee8832418c53ce3c2f7052defaafc54dceec9f93d7ed6c9bafa"
+    SECRET_KEY: str = str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
