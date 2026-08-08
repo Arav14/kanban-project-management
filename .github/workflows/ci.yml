@@ -55,6 +55,10 @@ jobs:
 
       - name: Debug backend environment
         working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/kanban_test
+          REDIS_URL: redis://localhost:6379
+          SECRET_KEY: test-secret-key
         run: |
           echo "Current directory:"
           pwd
