@@ -1,67 +1,166 @@
-import json
 import asyncio
-from typing import Dict, Set
-from fastapi import WebSocket
+import json
+import logging
+
 import redis.asyncio as aioredis
+from fastapi import WebSocket
+
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+
 class ConnectionManager:
-    """
-    Manages Websocket connections per board.
-    Uses Redis Pub/Sub to broadcast events aross multiple server instances
-    """
+    """Manage WebSocket connections per board and broadcast through Redis."""
 
-    def __init__(self):
-        # board.id -> set of connected websockets
-        self.connections: Dict[int, Set[WebSocket]] = {}
-        self.redis: aioredis.Redis = None
+    def __init__(self) -> None:
+        self.connections: dict[int, set[WebSocket]] = {}
+        self.redis: aioredis.Redis | None = None
+        self._listener_task: asyncio.Task | None = None
 
-    async def startup(self):
-        self.redis = await aioredis.from_url(settings.REDIS_URL, decode_responses = True)
-        # Start listening to Redis channel in background
-        asyncio.create_task(self._redis_listener())
+    async def startup(self) -> None:
+        if self.redis is not None:
+            return
 
-    async def connect(self, websocket: WebSocket, board_id: int):
-        await websocket.accept()
-        if board_id not in self.connections:
-            self.connections[board_id] = set()
-        self.connections[board_id].add(websocket)
+        self.redis = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+        )
 
-    def disconnect(self, websocket: WebSocket, board_id: int):
-        if board_id not in self.connections:
-            self.connections[board_id].discard(websocket)
+        self._listener_task = asyncio.create_task(
+            self._redis_listener()
+        )
 
-    async def broadcast(self, board_id: int, event: dict):
-        # Publish event to Redis - all server instances will pick it up
-        payload = json.dumps({"board_id": board_id, "event": event})
-        await self.redis.publish("kanban:events", payload)
+    async def shutdown(self) -> None:
+        if self._listener_task is not None:
+            self._listener_task.cancel()
 
-    async def _redis_listener(self):
-        # Subscribe to Redis and forward messages to local WebSocket clients
-        pubsub = self.redis.pubsub()
-        await pubsub.subscribe("kanban:events")
-
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
             try:
-                data = json.loads(message["data"])
-                board_id = data["board_id"]
-                event = data["event"]
-                await self._send_to_board(board_id, event)
-            except Exception:
+                await self._listener_task
+            except asyncio.CancelledError:
                 pass
 
-    async def _send_to_board(self, board_id: int, event: dict):
-        # Send event to all WebSocket clients on this board.
-        clients = self.connections.get(board_id, set()).copy()
-        dead = set()
-        for ws in clients:
+            self._listener_task = None
+
+        if self.redis is not None:
+            await self.redis.aclose()
+            self.redis = None
+
+    async def connect(
+        self,
+        websocket: WebSocket,
+        board_id: int,
+    ) -> None:
+        await websocket.accept()
+
+        self.connections.setdefault(
+            board_id,
+            set(),
+        ).add(websocket)
+
+    def disconnect(
+        self,
+        websocket: WebSocket,
+        board_id: int,
+    ) -> None:
+        clients = self.connections.get(board_id)
+
+        if clients is None:
+            return
+
+        clients.discard(websocket)
+
+        if not clients:
+            self.connections.pop(board_id, None)
+
+    async def broadcast(
+        self,
+        board_id: int,
+        event: dict,
+    ) -> None:
+        if self.redis is None:
+            return
+
+        payload = json.dumps(
+            {
+                "board_id": board_id,
+                "event": event,
+            }
+        )
+
+        await self.redis.publish(
+            "kanban:events",
+            payload,
+        )
+
+    async def _redis_listener(self) -> None:
+        if self.redis is None:
+            return
+
+        pubsub = self.redis.pubsub()
+
+        await pubsub.subscribe(
+            "kanban:events"
+        )
+
+        try:
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+
+                try:
+                    data = json.loads(
+                        message["data"]
+                    )
+
+                    await self._send_to_board(
+                        data["board_id"],
+                        data["event"],
+                    )
+
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                ):
+                    logger.exception(
+                        "Invalid Redis event payload"
+                    )
+
+        finally:
+            await pubsub.unsubscribe(
+                "kanban:events"
+            )
+            await pubsub.aclose()
+
+    async def _send_to_board(
+        self,
+        board_id: int,
+        event: dict,
+    ) -> None:
+        clients = (
+            self.connections
+            .get(board_id, set())
+            .copy()
+        )
+
+        dead: set[WebSocket] = set()
+
+        for websocket in clients:
             try:
-                await ws.send_json(event)
+                await websocket.send_json(event)
             except Exception:
-                dead.add(ws)
-        for ws in dead:
-            self.connections[board_id].discard(ws)
+                logger.exception(
+                    "Failed to send WebSocket event"
+                )
+                dead.add(websocket)
+
+        for websocket in dead:
+            self.disconnect(
+                websocket,
+                board_id,
+            )
+
 
 manager = ConnectionManager()
