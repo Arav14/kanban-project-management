@@ -53,6 +53,24 @@ jobs:
           pip install ruff==0.16.2
           ruff check .
 
+      - name: Debug backend environment
+        working-directory: backend
+        run: |
+          echo "Current directory:"
+          pwd
+
+          echo "Backend contents:"
+          ls -la
+
+          echo "main.py:"
+          ls -la main.py
+
+          echo "Python path:"
+          python -c "import sys; print('\n'.join(sys.path))"
+
+          echo "Import test:"
+          python -c "import main; print(main.__file__)"
+
       - name: Run tests
         working-directory: backend
         env:
