@@ -7,3 +7,6 @@ ignore = [
     "B008",
     "BLE001",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

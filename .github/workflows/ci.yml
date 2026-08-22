@@ -81,7 +81,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/kanban_test
           REDIS_URL: redis://localhost:6379
           SECRET_KEY: test-secret-key
-        run: pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short
 
   # ── Frontend Build ─────────────────────────────────────────────────────────
   frontend-build:
